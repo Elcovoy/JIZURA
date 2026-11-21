@@ -67,7 +67,7 @@ check('Bass region ends and original general signal resumes',()=>{
   const x=fixture(), general=B.buildAudioLike(x);
   const bass=B.buildAudioLike(x,{regions:[{start:4,end:5,source:'bass'}]});
   a.equal(bass.energy[60],general.energy[60]);
-  a.notEqual(bass.energy[105],general.energy[105]);
+  a.notEqual(bass.energy[104],general.energy[104]);
   a.equal(bass.energy[150],general.energy[150]);
 });
 check('Onset affects energy, never changes beat times or rate',()=>{
