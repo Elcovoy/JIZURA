@@ -77,7 +77,12 @@
   function onsetList(input, source, offset) {
     let arr;
     if (source === 'drums') arr = input.events?.drum_hits;
-    else if (source === 'general') return [];
+    else if (source === 'general') {
+      const combined = [...(input.events?.drum_hits || [])];
+      for (const list of Object.values(input.events?.instrument_onsets || {}))
+        if (Array.isArray(list)) combined.push(...list);
+      arr = combined;
+    }
     else arr = input.events?.instrument_onsets?.[source];
     return Array.isArray(arr)
       ? arr.filter(x => number(x.t) && number(x.strength) && x.t >= 0)
