@@ -30,7 +30,7 @@ test('provides energy at native 25 Hz without audio buffer',()=>{
 test('instrument region wins only inside selected interval',()=>{
   const f=fixture();const a=bridge.buildAudioLike(f,{defaultSource:'drums',regions:[
     {start:3,end:4,source:'bass',mode:'energy'}]});
-  assert.equal(a.energy[75]>0,true);assert.equal(a.bridgeMeta.regionCount,1);
+  assert.equal(a.energy[75]>0,true);assert.deepEqual(Object.keys(a).sort(),['beats','duration','energy','energyRate'].sort());
 });
 test('attack mode responds at shifted bass onset',()=>{
   const f=fixture();const a=bridge.buildAudioLike(f,{defaultSource:'bass',defaultMode:'onsets'});
