@@ -141,12 +141,9 @@
     const beats = input.beats.map(x => x.t + meta.offset)
       .filter(x => number(x) && x >= 0 && x < meta.sequenceDuration).sort((a,b)=>a-b);
     assert(beats.length > 0, 'no hay beats en el tiempo de secuencia');
-    return {
-      bpm:meta.bpm, beats, energy, energyRate:hz, duration:meta.sequenceDuration,
-      // No buffer, peaks or source file: JIZURA is not given audio.
-      bridgeMeta:{version:VERSION, timebase:'sequence', offset:meta.offset,
-        defaultSource, defaultMode, regionCount:regions.length}
-    };
+    // STRICT JIZURA AUDIO CONTRACT: do not expose bridge metadata or extra fields.
+    // The existing J.plan() consumes only beats, energy, energyRate, duration.
+    return { beats, energy, energyRate: hz, duration: meta.sequenceDuration };
   }
   function prepareProject(project, input, options = {}) {
     inspect(input);
