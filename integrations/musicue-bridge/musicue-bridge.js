@@ -10,7 +10,7 @@
   else root.CaminoMusicueBridge = api;
 })(typeof globalThis !== 'undefined' ? globalThis : this, function () {
   'use strict';
-  const VERSION = '1.0.0';
+  const VERSION = '1.1.0';
   const SOURCES = Object.freeze({
     general: 'rms_fast', drums: 'rms_drums', bass: 'rms_bass',
     vocals: 'rms_vocals', other: 'rms_other'
@@ -20,6 +20,20 @@
   const clamp = x => Math.max(0, Math.min(1, x));
   const assert = (ok, msg) => { if (!ok) throw new Error('MusicCue Bridge: ' + msg); };
   const copy = v => JSON.parse(JSON.stringify(v));
+  // Accept one MusicCue document as JSON object, JSON string or a one-document JSONL.
+  // A JSONL with multiple unrelated records must be assembled upstream: no guessing.
+  function parseInput(raw) {
+    if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+    assert(typeof raw === 'string' && raw.trim(), 'se esperaba objeto, JSON o JSONL');
+    try { const value = JSON.parse(raw); assert(value && !Array.isArray(value) && typeof value === 'object', 'JSON raíz debe ser objeto'); return value; }
+    catch (err) {
+      if (/MusicCue Bridge:/.test(String(err))) throw err;
+      const lines = raw.split(/\r?\n/).map(x => x.trim()).filter(Boolean);
+      assert(lines.length === 1, 'JSONL debe contener exactamente un documento completo');
+      try { const value = JSON.parse(lines[0]); assert(value && !Array.isArray(value) && typeof value === 'object', 'línea JSONL no es objeto'); return value; }
+      catch (e) { throw new Error('MusicCue Bridge: JSON/JSONL inválido: ' + e.message); }
+    }
+  }
   function percentile95(values) {
     const s = values.filter(v => number(v) && v >= 0).slice().sort((a, b) => a - b);
     return s.length ? Math.max(0.000001, s[Math.min(s.length - 1, Math.floor((s.length - 1) * 0.95))]) : 1;
@@ -39,10 +53,13 @@
     assert(energy && typeof energy === 'object', 'faltan curvas de energía');
     const base = energy.rms_fast;
     assert(base && number(base.hop_sec) && base.hop_sec > 0 && Array.isArray(base.values) && base.values.length > 0, 'rms_fast inválida');
+    const available = [];
     for (const [source, key] of Object.entries(SOURCES)) {
       const c = energy[key];
-      assert(c && Array.isArray(c.values) && number(c.hop_sec) && c.hop_sec > 0, 'curva ausente: ' + source);
+      if (c == null) continue; // only general energy is obligatory
+      assert(Array.isArray(c.values) && c.values.length > 0 && number(c.hop_sec) && c.hop_sec > 0, 'curva inválida: ' + source);
       assert(c.values.every(v => number(v) && v >= 0), 'valores RMS inválidos: ' + source);
+      available.push(source);
     }
     assert(Array.isArray(input.beats) && input.beats.length > 0, 'beats ausentes');
     return {
@@ -52,7 +69,7 @@
       sequenceDuration: duration,
       offset: a.sequence_offset_sec,
       firstBeatClean: a.first_downbeat_clean_sec ?? input.beat_grid_origin_sec,
-      sourceNames: Object.keys(SOURCES),
+      sourceNames: available,
       hasOnsets: Object.keys(input.events?.instrument_onsets || {}),
       sequenceStatus: a.sequence_status,
       energyHz: 1 / base.hop_sec
@@ -91,10 +108,12 @@
   }
   function normalizeCurve(input, source) {
     const c = input.energy_curves[SOURCES[source]];
+    assert(c, 'la fuente seleccionada no está disponible: ' + source);
     const p95 = percentile95(c.values);
     return { values:c.values, hop:c.hop_sec, p95 };
   }
   function buildAudioLike(input, options = {}) {
+    input = parseInput(input);
     const meta = inspect(input);
     const defaultSource = options.defaultSource || 'general';
     const defaultMode = options.defaultMode || 'energy';
@@ -103,15 +122,16 @@
     const boost = options.attackBoost == null ? 0.35 : options.attackBoost;
     assert(number(boost) && boost >= 0 && boost <= 1, 'attackBoost inválido');
     const regions = checkedRegions(options.regions || [], meta.sequenceDuration);
-    const hz = options.energyRate || meta.energyHz;
+    const hz = options.energyRate ?? meta.energyHz;
     assert(number(hz) && hz >= 1 && hz <= 200, 'energyRate fuera de rango');
     const n = Math.ceil(meta.sequenceDuration * hz);
     assert(n <= 1000000, 'demasiadas muestras');
     const energy = new Float32Array(n);
-    const curves = Object.fromEntries(Object.keys(SOURCES).map(s => [s, normalizeCurve(input,s)]));
-    const onsets = Object.fromEntries(Object.keys(SOURCES).map(s => [s, onsetList(input,s,meta.offset)]));
+    const active = new Set([defaultSource, ...regions.map(r => r.source)]);
+    const curves = Object.fromEntries([...active].map(s => [s, normalizeCurve(input,s)]));
+    const onsets = Object.fromEntries([...active].map(s => [s, onsetList(input,s,meta.offset)]));
     const attacks = {};
-    for (const s of Object.keys(SOURCES)) {
+    for (const s of active) {
       const seq = new Float32Array(n);
       for (const hit of onsets[s]) {
         const start = Math.max(0, Math.ceil(hit.t * hz));
@@ -138,15 +158,17 @@
         : region.mode === 'both' ? clamp(continuous * (1 - region.attackBoost) + attack * region.attackBoost)
         : continuous;
     }
+    assert(input.beats.every(x => x && number(x.t) && x.t >= 0), 'beats[].t debe ser un número de segundos de audio limpio');
     const beats = input.beats.map(x => x.t + meta.offset)
-      .filter(x => number(x) && x >= 0 && x < meta.sequenceDuration).sort((a,b)=>a-b);
+      .filter(x => x >= 0 && x < meta.sequenceDuration).sort((a,b)=>a-b);
     assert(beats.length > 0, 'no hay beats en el tiempo de secuencia');
     // STRICT JIZURA AUDIO CONTRACT: do not expose bridge metadata or extra fields.
     // The existing J.plan() consumes only beats, energy, energyRate, duration.
     return { beats, energy, energyRate: hz, duration: meta.sequenceDuration };
   }
   function prepareProject(project, input, options = {}) {
-    inspect(input);
+    input = parseInput(input);
+    const meta = inspect(input);
     assert(project && typeof project === 'object', 'se requiere proyecto JIZURA');
     const p = copy(project);
     const bpm = input.timeline_alignment.grid_bpm || input.bpm;
@@ -156,7 +178,7 @@
     // LRC markers are owned by Camino Lyrics and must be in sequence seconds.
     if (options.lineTimes) {
       assert(typeof options.lineTimes === 'object' && !Array.isArray(options.lineTimes), 'lineTimes inválido');
-      for (const t of Object.values(options.lineTimes)) assert(number(t) && t >= 0, 'lineTimes debe estar en segundos de secuencia');
+      for (const t of Object.values(options.lineTimes)) assert(number(t) && t >= 0 && t < meta.sequenceDuration, 'lineTimes debe estar dentro de la duración de secuencia');
       p.timing.lineTimes = Object.assign({}, p.timing.lineTimes || {}, options.lineTimes);
     }
     // JIZURA's optional typesetting mode shifts text 0.2s before vocal timing.
@@ -164,11 +186,14 @@
     if (options.preserveExactTiming !== false) p.typeset = false;
     return p;
   }
+  function prepare(project, input, options = {}) {
+    const parsed = parseInput(input);
+    return { project: prepareProject(project, parsed, options), audioLike: buildAudioLike(parsed, options) };
+  }
   function makePlan(J, project, input, options = {}) {
     assert(J && typeof J.plan === 'function', 'JIZURA J.plan no está disponible');
-    const prepared = prepareProject(project, input, options);
-    const musical = buildAudioLike(input, options);
-    return J.plan(prepared, musical);
+    const data = prepare(project, input, options);
+    return J.plan(data.project, data.audioLike);
   }
-  return Object.freeze({ VERSION, SOURCES, inspect, buildAudioLike, prepareProject, makePlan });
+  return Object.freeze({ VERSION, SOURCES, parseInput, inspect, buildAudioLike, prepareProject, prepare, makePlan });
 });
