@@ -59,6 +59,8 @@
       if (c == null) continue; // only general energy is obligatory
       assert(Array.isArray(c.values) && c.values.length > 0 && number(c.hop_sec) && c.hop_sec > 0, 'curva inválida: ' + source);
       assert(c.values.every(v => number(v) && v >= 0), 'valores RMS inválidos: ' + source);
+      assert(c.values.length * c.hop_sec >= input.duration_sec - Math.max(0.2, 2 * c.hop_sec),
+        'curva incompleta: ' + source);
       available.push(source);
     }
     assert(Array.isArray(input.beats) && input.beats.length > 0, 'beats ausentes');
@@ -181,6 +183,9 @@
       for (const t of Object.values(options.lineTimes)) assert(number(t) && t >= 0 && t < meta.sequenceDuration, 'lineTimes debe estar dentro de la duración de secuencia');
       p.timing.lineTimes = Object.assign({}, p.timing.lineTimes || {}, options.lineTimes);
     }
+    if (p.timing.lineTimes) for (const t of Object.values(p.timing.lineTimes))
+      assert(number(t) && t >= 0 && t < meta.sequenceDuration,
+        'lineTimes del proyecto fuera del reloj de la secuencia');
     // JIZURA's optional typesetting mode shifts text 0.2s before vocal timing.
     // To honor precise supplied timestamps, disable only for bridge project clone.
     if (options.preserveExactTiming !== false) p.typeset = false;
